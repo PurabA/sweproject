@@ -3,6 +3,7 @@ import { api } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import PdfServiceBlock from '../components/PdfServiceBlock.jsx';
 
+
 export default function PharmacyPage() {
   const { user } = useAuth();
   const canManage = ['admin', 'pharmacist'].includes(user?.role);
