@@ -62,6 +62,29 @@ export default function DashboardHome() {
     }
   }, [user, isAdmin, isDoctor]);
 
+  useEffect(() => {
+    if (!user) return;
+    const timer = window.setInterval(() => {
+      api('/api/notifications').then((rows) => setNotifications((rows || []).slice(0, 5))).catch(() => {});
+      if (isAdmin) {
+        api('/api/dashboard').then(setData).catch(() => {});
+      }
+      if (isDoctor) {
+        api('/api/consultations/scheduled-appointments')
+          .then((rows) => {
+            const today = new Date();
+            const filtered = (rows || [])
+              .filter((a) => isSameDay(new Date(a.scheduled_at), today))
+              .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+            setTodayAppts(filtered);
+          })
+          .catch(() => {});
+      }
+    }, 30000);
+
+    return () => window.clearInterval(timer);
+  }, [user, isAdmin, isDoctor]);
+
   const changePassword = async (e) => {
     e.preventDefault();
     setPwMsg('');
