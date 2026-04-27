@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import pool from '../db.js';
 import { authenticate } from '../middleware/auth.js';
+import { refreshSystemAlerts, getRecentActiveAlerts } from '../utils/systemAlerts.js';
 
 const router = Router();
 router.use(authenticate);
@@ -52,10 +53,8 @@ router.get('/', async (req, res) => {
     base.icuOccupied = icu.c;
   }
 
-  const [alerts] = await pool.query(
-    `SELECT * FROM system_alerts WHERE acknowledged = 0 ORDER BY created_at DESC LIMIT 5`
-  );
-  base.recentAlerts = alerts;
+  await refreshSystemAlerts(pool);
+  base.recentAlerts = await getRecentActiveAlerts(pool, 5);
 
   res.json(base);
 });
