@@ -45,6 +45,7 @@ function computeTotals(items, taxOverride) {
 // ---------------------------------------------------------------
 // READ — payment history (paid bills, optional patient filter)
 // ---------------------------------------------------------------
+//This corresponds to the billing and reports pages
 router.get('/billing/payment-history', requireRole('admin', 'receptionist', 'doctor', 'pharmacist'), async (req, res) => {
   const pid = num(req.query.patientId);
   let sql = `
@@ -526,7 +527,7 @@ router.patch('/bills/:id', requireRole('admin', 'receptionist'), async (req, res
 });
 
 // ---------------------------------------------------------------
-// DELETE — admin only (cascades to bill_items)
+// DELETE — admin only (cascades to bill_items) Authorized access
 // ---------------------------------------------------------------
 router.delete('/bills/:id', requireRole('admin'), async (req, res) => {
   const id = num(req.params.id);
@@ -536,5 +537,4 @@ router.delete('/bills/:id', requireRole('admin'), async (req, res) => {
   await audit(req, 'delete', 'bill', id);
   res.json({ ok: true });
 });
-
 export default router;
