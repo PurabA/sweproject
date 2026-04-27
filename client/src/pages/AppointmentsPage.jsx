@@ -24,7 +24,6 @@ export default function AppointmentsPage() {
   const [availDate, setAvailDate] = useState('');
   const [slots, setSlots] = useState([]);
   const [slotsLoaded, setSlotsLoaded] = useState(false);
-  const [follow, setFollow] = useState({ patientId: '', doctorId: '', parentAppointmentId: '', scheduledAt: '', reason: '' });
   const [msg, setMsg] = useState('');
 
   const canCreate = ['admin', 'receptionist'].includes(user?.role);
@@ -43,6 +42,9 @@ export default function AppointmentsPage() {
   const create = async (e) => {
     e.preventDefault();
     setMsg('');
+    if (!form.patientId) return setMsg('Select a patient before booking.');
+    if (!form.doctorId) return setMsg('Select a doctor before booking.');
+    if (!form.scheduledAt) return setMsg('Select an appointment date and time.');
     try {
       await api('/api/appointments', {
         method: 'POST',
@@ -104,7 +106,7 @@ export default function AppointmentsPage() {
   };
 
   const cancelAppt = async (id) => {
-    const reason = window.prompt('Cancellation reason (required for AP-4)', 'Schedule conflict');
+    const reason = window.prompt('Cancellation reason', 'Schedule conflict');
     if (reason == null) return;
     await api(`/api/appointments/${id}`, {
       method: 'PATCH',
@@ -113,33 +115,12 @@ export default function AppointmentsPage() {
     load();
   };
 
-  const submitFollowUp = async (e) => {
-    e.preventDefault();
-    setMsg('');
-    try {
-      await api('/api/appointments/follow-up', {
-        method: 'POST',
-        body: JSON.stringify({
-          patientId: Number(follow.patientId),
-          doctorId: user?.role === 'doctor' ? undefined : Number(follow.doctorId),
-          parentAppointmentId: Number(follow.parentAppointmentId),
-          scheduledAt: datetimeLocalToSqlDateTime(follow.scheduledAt),
-          reason: follow.reason,
-        }),
-      });
-      setFollow({ patientId: '', doctorId: '', parentAppointmentId: '', scheduledAt: '', reason: '' });
-      load();
-    } catch (ex) {
-      setMsg(ex.message);
-    }
-  };
-
   return (
     <div className="space-y-8">
       <header className="border-b border-slate-200 pb-6">
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">HMIS — Appointment &amp; Scheduling domain</p>
         <h1 className="hmis-page-title">Appointments &amp; scheduling</h1>
-        <p className="hmis-page-desc">Book visits in open 30-minute blocks; manage follow-ups, reschedules, and cancellations from the schedule below.</p>
+        <p className="hmis-page-desc">Book visits in open 30-minute blocks; manage reschedules and cancellations from the schedule below.</p>
       </header>
       {msg ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{msg}</div> : null}
 
@@ -246,7 +227,6 @@ export default function AppointmentsPage() {
               <label className="hmis-label">Visit type</label>
               <select className="hmis-select" value={form.visitType} onChange={(e) => setForm({ ...form, visitType: e.target.value })}>
                 <option value="routine">Routine</option>
-                <option value="follow_up">Follow-up</option>
                 <option value="emergency">Emergency</option>
               </select>
             </div>
@@ -255,68 +235,13 @@ export default function AppointmentsPage() {
               <input className="hmis-input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
             </div>
             <div className="md:col-span-2">
-              <button type="submit" className="hmis-btn-primary">
+              <button type="submit" className="hmis-btn-primary" disabled={!form.patientId || !form.doctorId || !form.scheduledAt}>
                 Schedule encounter
               </button>
             </div>
           </form>
         </PdfServiceBlock>
       ) : null}
-
-      <PdfServiceBlock
-        code="CW-5 (scheduling)"
-        title="Follow-up Scheduling"
-        description="Book a return visit linked to a prior appointment (visit_type follow-up, rescheduled_from_id)."
-      >
-        {canCreate || user?.role === 'doctor' ? (
-          <form onSubmit={submitFollowUp} className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="hmis-label">Patient</label>
-              <select required className="hmis-select" value={follow.patientId} onChange={(e) => setFollow({ ...follow, patientId: e.target.value })}>
-                <option value="">Select…</option>
-                {patients.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.patient_number} — {p.first_name} {p.last_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {user?.role === 'doctor' ? null : (
-              <div>
-                <label className="hmis-label">Physician</label>
-                <select required className="hmis-select" value={follow.doctorId} onChange={(e) => setFollow({ ...follow, doctorId: e.target.value })}>
-                  <option value="">Select…</option>
-                  {doctors.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.last_name}, {d.first_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div>
-              <label className="hmis-label">Prior appointment ID</label>
-              <input required className="hmis-input font-mono text-sm" value={follow.parentAppointmentId} onChange={(e) => setFollow({ ...follow, parentAppointmentId: e.target.value })} />
-            </div>
-            <div>
-              <label className="hmis-label">Follow-up date &amp; time</label>
-              <input required type="datetime-local" step={1800} className="hmis-input" value={follow.scheduledAt} onChange={(e) => setFollow({ ...follow, scheduledAt: e.target.value })} />
-              <p className="mt-1 text-xs text-slate-500">Same session rules: half-hour starts, 08:00–16:30, no double-booking.</p>
-            </div>
-            <div className="md:col-span-2">
-              <label className="hmis-label">Reason</label>
-              <input className="hmis-input" value={follow.reason} onChange={(e) => setFollow({ ...follow, reason: e.target.value })} />
-            </div>
-            <div className="md:col-span-2">
-              <button type="submit" className="hmis-btn-secondary">
-                Book follow-up
-              </button>
-            </div>
-          </form>
-        ) : (
-          <p className="text-sm text-slate-600">Follow-up booking is available to physicians and registration staff.</p>
-        )}
-      </PdfServiceBlock>
 
       <section className="hmis-table-wrap">
         <div className="hmis-card-h">Appointments</div>

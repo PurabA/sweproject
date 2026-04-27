@@ -2,11 +2,41 @@ import { Router } from 'express';
 import pool from '../db.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
+import { nextBillNumber } from '../utils/numbers.js';
 
 const router = Router();
 router.use(authenticate);
 
+const CONSULTATION_FEE = 300.0; // ₹
+const SURGERY_FEE = 2000.0; // ₹
+const TAX_RATE = 0.0; // No GST applied to clinical services in this build
+const round2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+const LAB_PRIORITIES = new Set(['routine', 'urgent', 'stat']);
+
 // --- Consultations ---
+
+// Scheduled appointments dropdown for the consultation form.
+// Doctors see only their own scheduled appointments.
+// Admins/receptionists see every scheduled appointment.
+router.get('/consultations/scheduled-appointments', requireRole('admin', 'doctor', 'receptionist'), async (req, res) => {
+  let sql = `
+    SELECT a.id, a.scheduled_at, a.reason, a.visit_type,
+           p.id AS patient_id, p.patient_number, p.first_name AS pf, p.last_name AS pl,
+           u.id AS doctor_id, u.first_name AS df, u.last_name AS dl
+      FROM appointments a
+      JOIN patients p ON p.id = a.patient_id
+      JOIN users u ON u.id = a.doctor_id
+     WHERE a.status = 'scheduled'`;
+  const params = [];
+  if (req.user.role === 'doctor') {
+    sql += ' AND a.doctor_id = ?';
+    params.push(req.user.id);
+  }
+  sql += ' ORDER BY a.scheduled_at ASC LIMIT 200';
+  const [rows] = await pool.query(sql, params);
+  res.json(rows);
+});
+
 router.get('/consultations', requireRole('admin', 'doctor', 'receptionist', 'pharmacist', 'lab'), async (req, res) => {
   let sql = `
     SELECT c.*, p.patient_number, p.first_name AS pf, p.last_name AS pl,
@@ -26,29 +56,65 @@ router.get('/consultations', requireRole('admin', 'doctor', 'receptionist', 'pha
 
 router.post('/consultations', requireRole('admin', 'doctor'), async (req, res) => {
   const b = req.body || {};
-  const doctorId = req.user.role === 'doctor' ? req.user.id : b.doctorId;
-  if (!doctorId) return res.status(400).json({ error: 'doctorId required' });
+  let doctorId = req.user.role === 'doctor' ? req.user.id : (b.doctorId ? Number(b.doctorId) : null);
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
-    let appointmentId = b.appointmentId || null;
-    if (!appointmentId) {
+    // 1. Resolve the appointment.  If the caller passed appointmentId, use it
+    //    after verifying it belongs to this doctor + patient + is still scheduled.
+    //    Otherwise, fall back to the most recent scheduled appointment for that pair.
+    let appointmentId = b.appointmentId ? Number(b.appointmentId) : null;
+    let patientId = b.patientId ? Number(b.patientId) : null;
+
+    if (appointmentId) {
+      const [[appt]] = await conn.query(
+        `SELECT id, patient_id, doctor_id, status FROM appointments WHERE id = ?`,
+        [appointmentId]
+      );
+      if (!appt) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Appointment not found' });
+      }
+      if (appt.status !== 'scheduled') {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Appointment is no longer scheduled' });
+      }
+      if (req.user.role === 'doctor' && appt.doctor_id !== req.user.id) {
+        await conn.rollback();
+        return res.status(403).json({ error: 'Not your appointment' });
+      }
+      patientId = appt.patient_id;
+      doctorId = appt.doctor_id;
+    } else if (patientId) {
+      if (!doctorId) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'doctorId required when no appointment is selected' });
+      }
       const [[row]] = await conn.query(
         `SELECT id FROM appointments
           WHERE patient_id = ? AND doctor_id = ? AND status = 'scheduled'
           ORDER BY scheduled_at DESC
           LIMIT 1`,
-        [b.patientId, doctorId]
+        [patientId, doctorId]
       );
       appointmentId = row?.id || null;
+    } else {
+      await conn.rollback();
+      return res.status(400).json({ error: 'patientId or appointmentId required' });
     }
 
+    if (!doctorId) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'doctorId required' });
+    }
+
+    // 2. Create the consultation.
     const [r] = await conn.execute(
       `INSERT INTO consultations (patient_id, doctor_id, appointment_id, chief_complaint, diagnosis, clinical_notes, triage_level)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
-        b.patientId,
+        patientId,
         doctorId,
         appointmentId,
         b.chiefComplaint || null,
@@ -59,20 +125,41 @@ router.post('/consultations', requireRole('admin', 'doctor'), async (req, res) =
     );
     const consultationId = r.insertId;
 
+    // 3. Mark the appointment completed (it's now "done", not "scheduled" → drops out of the dropdown).
     if (appointmentId) {
       await conn.execute(
-        `UPDATE appointments
-            SET status = 'completed'
-          WHERE id = ? AND status = 'scheduled'`,
+        `UPDATE appointments SET status = 'completed' WHERE id = ? AND status = 'scheduled'`,
         [appointmentId]
       );
     }
 
+    // 4. Optional lab orders. They are linked to this consultation so the lab
+    //    team sees them in its request queue immediately after sign-off.
+    const labOrders = Array.isArray(b.labOrders)
+      ? b.labOrders
+          .map((lo) => ({
+            testName: String(lo?.testName || '').trim(),
+            priority: LAB_PRIORITIES.has(String(lo?.priority || '').trim()) ? String(lo.priority).trim() : 'routine',
+          }))
+          .filter((lo) => lo.testName.length > 0)
+      : [];
+    const labOrderIds = [];
+    for (const lo of labOrders) {
+      const [labResult] = await conn.execute(
+        `INSERT INTO lab_orders (patient_id, ordered_by, consultation_id, test_name, priority, status)
+         VALUES (?, ?, ?, ?, ?, 'ordered')`,
+        [patientId, doctorId, consultationId, lo.testName.slice(0, 200), lo.priority]
+      );
+      labOrderIds.push(labResult.insertId);
+    }
+
+    // 5. Optional surgery request.
     let surgeryRequestId = null;
     const sr = b.surgeryRequest && typeof b.surgeryRequest === 'object' ? b.surgeryRequest : null;
     if (sr?.request === true) {
       const scheduledAt = String(sr.scheduledAt || '').trim();
       if (!scheduledAt) {
+        await conn.rollback();
         return res.status(400).json({ error: 'surgeryRequest.scheduledAt required when requesting surgery' });
       }
       const icuRequired = sr.icuRequired !== false;
@@ -80,17 +167,16 @@ router.post('/consultations', requireRole('admin', 'doctor'), async (req, res) =
       const [ins] = await conn.execute(
         `INSERT INTO surgery_requests (consultation_id, patient_id, doctor_id, status, surgery_scheduled_at, surgery_notes, icu_required)
          VALUES (?, ?, ?, 'requested', ?, ?, ?)`,
-        [consultationId, b.patientId, doctorId, scheduledAt, notes, icuRequired ? 1 : 0]
+        [consultationId, patientId, doctorId, scheduledAt, notes, icuRequired ? 1 : 0]
       );
       surgeryRequestId = ins.insertId;
 
-      // Notify receptionists so they can book ICU (and coordination).
       const [rec] = await conn.query(`SELECT id FROM users WHERE role = 'receptionist' AND is_active = 1 ORDER BY id`);
       const subject = `Surgery request (ICU booking needed)`;
       const body = [
         `Doctor: ${req.user?.email || doctorId}`,
         `Consultation ID: ${consultationId}`,
-        `Patient ID: ${b.patientId}`,
+        `Patient ID: ${patientId}`,
         `Scheduled surgery time: ${scheduledAt}`,
         `ICU required: ${icuRequired ? 'yes' : 'no'}`,
         notes ? `Notes: ${notes}` : null,
@@ -106,9 +192,54 @@ router.post('/consultations', requireRole('admin', 'doctor'), async (req, res) =
       }
     }
 
+    // 6. Auto-generate a pending bill for this consultation.  Line items are
+    //    linked to the consultation so the doctor sees them on their billing
+    //    view, and so the row appears in Accounts Receivable on the billing
+    //    page until the receptionist/admin posts payment.
+    //
+    //    Default lines:
+    //      • Appointment / consultation fee — ₹300
+    //      • Surgery (only if the doctor requested one)         — ₹2000
+    const lines = [
+      { description: 'Consultation visit', quantity: 1, unitPrice: CONSULTATION_FEE },
+    ];
+    if (surgeryRequestId) {
+      lines.push({ description: 'Surgery procedure (advance booking)', quantity: 1, unitPrice: SURGERY_FEE });
+    }
+    const subtotal = round2(lines.reduce((s, it) => s + it.quantity * it.unitPrice, 0));
+    const tax = round2(subtotal * TAX_RATE);
+    const total = round2(subtotal + tax);
+    const billNumber = await nextBillNumber();
+    const [billResult] = await conn.execute(
+      `INSERT INTO bills (patient_id, bill_number, total_amount, tax_amount, status, notes, created_by)
+       VALUES (?, ?, ?, ?, 'pending', 'Auto-generated at consultation sign-off', ?)`,
+      [patientId, billNumber, total, tax, req.user.id]
+    );
+    const billId = billResult.insertId;
+    for (const ln of lines) {
+      await conn.execute(
+        `INSERT INTO bill_items (bill_id, description, quantity, unit_price, consultation_id, appointment_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [billId, ln.description, ln.quantity, ln.unitPrice, consultationId, appointmentId]
+      );
+    }
+
     await conn.commit();
-    await audit(req, 'create', 'consultation', consultationId, { appointmentId, surgeryRequestId });
-    res.status(201).json({ id: consultationId, appointmentId, surgeryRequestId });
+    await audit(req, 'create', 'consultation', consultationId, {
+      appointmentId,
+      labOrderIds,
+      surgeryRequestId,
+      autoBillId: billId,
+      autoBillNumber: billNumber,
+      total,
+    });
+    res.status(201).json({
+      id: consultationId,
+      appointmentId,
+      labOrderIds,
+      surgeryRequestId,
+      bill: { id: billId, billNumber, total, status: 'pending' },
+    });
   } catch (e) {
     await conn.rollback();
     throw e;
@@ -139,7 +270,7 @@ router.patch('/consultations/:id', requireRole('admin', 'doctor'), async (req, r
 });
 
 // --- Lab orders ---
-router.get('/lab-orders', requireRole('admin', 'doctor', 'receptionist', 'pharmacist', 'lab'), async (req, res) => {
+router.get('/lab-orders', requireRole('admin', 'doctor', 'receptionist', 'pharmacist', 'lab'), async (_req, res) => {
   const [rows] = await pool.query(
     `SELECT lo.*, p.patient_number, p.first_name AS pf, p.last_name AS pl
      FROM lab_orders lo JOIN patients p ON p.id = lo.patient_id ORDER BY lo.ordered_at DESC LIMIT 300`
@@ -172,231 +303,35 @@ router.patch('/lab-orders/:id', requireRole('admin', 'doctor', 'pharmacist', 'la
 });
 
 // --- Prescriptions ---
-// 1. Get all prescriptions (General list for Pharmacists & Admins)
-router.get('/prescriptions', requireRole('admin', 'doctor', 'pharmacist', 'receptionist'), async (req, res) => {
+router.get('/prescriptions', requireRole('admin', 'doctor', 'pharmacist'), async (_req, res) => {
   const [rows] = await pool.query(
-    `SELECT pr.*, p.patient_number, p.first_name AS pf, p.last_name AS pl,
-            u.first_name AS df, u.last_name AS dl
-     FROM prescriptions pr 
-     JOIN patients p ON p.id = pr.patient_id 
-     JOIN users u ON u.id = pr.doctor_id
-     ORDER BY pr.created_at DESC LIMIT 300`
+    `SELECT pr.*, p.patient_number, p.first_name AS pf, p.last_name AS pl
+     FROM prescriptions pr JOIN patients p ON p.id = pr.patient_id ORDER BY pr.created_at DESC LIMIT 300`
   );
   res.json(rows);
 });
 
-// 2. Get specific prescription details (Header + Items)
-router.get('/prescriptions/:id', requireRole('admin', 'doctor', 'pharmacist', 'receptionist'), async (req, res) => {
-  // Fetch the parent prescription header
-  const [presc] = await pool.query(
-    `SELECT pr.*, p.patient_number, p.first_name AS pf, p.last_name AS pl,
-            u.first_name AS df, u.last_name AS dl
-     FROM prescriptions pr 
-     JOIN patients p ON p.id = pr.patient_id
-     JOIN users u ON u.id = pr.doctor_id
-     WHERE pr.id = ?`, 
-    [req.params.id]
-  );
-  
-  if (!presc.length) return res.status(404).json({ error: 'Prescription not found' });
-
-  // Fetch the child items (the specific drugs)
-  const [items] = await pool.query(
-    `SELECT pi.*, i.name as medicine_name 
-     FROM prescription_items pi
-     LEFT JOIN inventory i ON i.id = pi.medicine_id
-     WHERE pi.prescription_id = ?`, 
-    [req.params.id]
-  );
-  
-  res.json({ ...presc[0], items });
-});
-
-// 3. Get all prescriptions for a specific patient
-router.get('/prescriptions/patient/:patientId', requireRole('admin', 'doctor', 'pharmacist'), async (req, res) => {
-  const [rows] = await pool.query(
-    `SELECT pr.*, u.first_name AS df, u.last_name AS dl
-     FROM prescriptions pr 
-     JOIN users u ON u.id = pr.doctor_id
-     WHERE pr.patient_id = ? 
-     ORDER BY pr.created_at DESC`,
-    [req.params.patientId]
-  );
-  res.json(rows);
-});
-
-// 4. Get audit logs for a specific prescription (only admins should see the full lifecycle audit trail)
-router.get('/prescriptions/:id/audit', requireRole('admin'), async (req, res) => {
-  const [logs] = await pool.query(
-    `SELECT a.*, u.first_name, u.last_name, u.role 
-     FROM audit_logs a
-     JOIN users u ON u.id = a.user_id
-     WHERE a.entity = 'prescription' AND a.entity_id = ?
-     ORDER BY a.created_at ASC`,
-    [req.params.id]
-  );
-  res.json(logs);
-});
-
-// insert into prescriptions database transaction
 router.post('/prescriptions', requireRole('admin', 'doctor'), async (req, res) => {
   const b = req.body || {};
   const prescribedBy = req.user.role === 'doctor' ? req.user.id : b.prescribedBy;
-  const items = b.items || []; // Array of { medicineId, dosage, frequency, duration, quantity }
-
-  if (!items.length) {
-    return res.status(400).json({ error: 'A prescription must contain at least one item.' });
-  }
-
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    // 1. Validate Inventory
-    for (const item of items) {
-      const [stock] = await conn.query('SELECT stock_quantity FROM inventory WHERE id = ?', [item.medicineId]);
-      if (!stock.length || stock[0].stock_quantity < item.quantity) {
-        throw new Error(`Insufficient stock for medicine ID ${item.medicineId}`);
-      }
-    }
-
-    // 2. Insert Parent Prescription
-    const [prescResult] = await conn.execute(
-      `INSERT INTO prescriptions (consultation_id, patient_id, doctor_id, status, notes)
-       VALUES (?, ?, ?, 'ACTIVE', ?)`,
-      [b.consultationId, b.patientId, prescribedBy, b.notes || null]
-    );
-    const prescriptionId = prescResult.insertId;
-
-    // 3. Insert Child Items
-    for (const item of items) {
-      await conn.execute(
-        `INSERT INTO prescription_items (prescription_id, medicine_id, dosage, frequency, duration_days, quantity, special_instructions)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          prescriptionId, 
-          item.medicineId, 
-          item.dosage, 
-          item.frequency, 
-          item.duration, 
-          item.quantity, 
-          item.specialInstructions || null
-        ]
-      );
-    }
-
-    await conn.commit();
-    await audit(req, 'create', 'prescription', prescriptionId);
-    res.status(201).json({ id: prescriptionId, status: 'ACTIVE' });
-
-  } catch (e) {
-    await conn.rollback();
-    // Return 422 Unprocessable Entity for inventory failures as per UML
-    res.status(422).json({ error: e.message }); 
-  } finally {
-    conn.release();
-  }
-});
-
-// The Update Route
-router.patch('/prescriptions/:id', requireRole('doctor'), async (req, res) => {
-  const b = req.body || {};
-  
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    // 1. Verify it is still active
-    const [current] = await conn.query('SELECT status, doctor_id FROM prescriptions WHERE id = ? FOR UPDATE', [req.params.id]);
-    if (!current.length || current[0].status !== 'ACTIVE') {
-      throw new Error('Only ACTIVE prescriptions can be updated.');
-    }
-    
-    // 2. Ensure only the prescribing doctor updates it
-    if (current[0].doctor_id !== req.user.id) {
-       throw new Error('You can only update your own prescriptions.');
-    }
-
-    // 3. Update the parent prescription (e.g., general notes)
-    await conn.execute(
-      `UPDATE prescriptions SET notes = COALESCE(?, notes) WHERE id = ?`,
-      [b.notes ?? null, req.params.id]
-    );
-
-    // 4. Update the items (handle multi-drug updates by deleting the old items and inserting the new ones)
-    if (b.items && b.items.length > 0) {
-      await conn.execute(`DELETE FROM prescription_items WHERE prescription_id = ?`, [req.params.id]);
-      
-      for (const item of b.items) {
-        await conn.execute(
-          `INSERT INTO prescription_items (prescription_id, medicine_id, dosage, frequency, duration_days, quantity, special_instructions)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [req.params.id, item.medicineId, item.dosage, item.frequency, item.duration, item.quantity, item.specialInstructions || null]
-        );
-      }
-    }
-
-    await conn.commit();
-    await audit(req, 'update', 'prescription', req.params.id);
-    res.json({ ok: true });
-  } catch (e) {
-    await conn.rollback();
-    res.status(400).json({ error: e.message });
-  } finally {
-    conn.release();
-  }
-});
-
-// The Revoke Route (Doctor/Admin)
-router.patch('/prescriptions/:id/revoke', requireRole('admin', 'doctor'), async (req, res) => {
-  const [current] = await pool.query('SELECT doctor_id, status FROM prescriptions WHERE id = ?', [req.params.id]);
-  
-  if (!current.length || current[0].status !== 'ACTIVE') {
-     return res.status(400).json({ error: 'Only ACTIVE prescriptions can be revoked.' });
-  }
-  
-  if (req.user.role === 'doctor' && current[0].doctor_id !== req.user.id) {
-      return res.status(403).json({ error: 'You can only revoke your own prescriptions.' });
-  }
-
-  await pool.execute(
-    `UPDATE prescriptions SET status = 'REVOKED', revoked_by = ?, revoked_at = NOW() WHERE id = ?`,
-    [req.user.id, req.params.id]
+  const [r] = await pool.execute(
+    `INSERT INTO prescriptions (consultation_id, patient_id, prescribed_by, medication_name, dosage, quantity, instructions, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    [b.consultationId, b.patientId, prescribedBy, b.medicationName, b.dosage || null, b.quantity || 1, b.instructions || null]
   );
-  
-  await audit(req, 'update', 'prescription', req.params.id, { action: 'REVOKE' });
-  res.json({ ok: true });
+  await audit(req, 'create', 'prescription', r.insertId);
+  res.status(201).json({ id: r.insertId });
 });
 
-// The Dispense Route (Pharmacist)
-router.patch('/prescriptions/:id/dispense', requireRole('pharmacist'), async (req, res) => {
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [current] = await conn.query('SELECT status FROM prescriptions WHERE id = ? FOR UPDATE', [req.params.id]);
-    if (!current.length || current[0].status !== 'ACTIVE') {
-      throw new Error('Prescription is not ACTIVE.');
-    }
-
-    // 1. Update status
-    await conn.execute(`UPDATE prescriptions SET status = 'DISPENSED' WHERE id = ?`, [req.params.id]);
-
-    // 2. Decrement Inventory Stock
-    const [items] = await conn.query('SELECT medicine_id, quantity FROM prescription_items WHERE prescription_id = ?', [req.params.id]);
-    for (const item of items) {
-       await conn.execute('UPDATE inventory SET stock_quantity = stock_quantity - ? WHERE id = ?', [item.quantity, item.medicine_id]);
-    }
-
-    await conn.commit();
-    await audit(req, 'update', 'prescription', req.params.id, { action: 'DISPENSE' });
-    res.json({ ok: true });
-  } catch (e) {
-    await conn.rollback();
-    res.status(400).json({ error: e.message });
-  } finally {
-    conn.release();
-  }
+router.patch('/prescriptions/:id', requireRole('admin', 'doctor', 'pharmacist'), async (req, res) => {
+  const b = req.body || {};
+  await pool.execute(
+    `UPDATE prescriptions SET status = COALESCE(?, status), dosage = COALESCE(?, dosage), instructions = COALESCE(?, instructions)
+     WHERE id = ?`,
+    [b.status ?? null, b.dosage ?? null, b.instructions ?? null, req.params.id]
+  );
+  await audit(req, 'update', 'prescription', req.params.id);
+  res.json({ ok: true });
 });
 
 export default router;

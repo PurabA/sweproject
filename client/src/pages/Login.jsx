@@ -43,7 +43,7 @@ export default function Login() {
             </div>
             <div>
               <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#bae6fd]">Metropolitan General Hospital</div>
-              <div className="mt-0.5 text-xl font-bold tracking-tight text-white">HMIS — G3 services</div>
+              <div className="mt-0.5 text-xl font-bold tracking-tight text-white">HMIS</div>
             </div>
           </div>
           <h1 className="max-w-md text-3xl font-bold leading-tight tracking-tight text-white lg:text-[2rem]">

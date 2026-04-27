@@ -17,9 +17,6 @@ function emptyEditForm() {
     bloodGroup: '',
     emergencyContactName: '',
     emergencyContactPhone: '',
-    insuranceProvider: '',
-    insurancePolicyNumber: '',
-    insuranceGroupNumber: '',
   };
 }
 
@@ -36,13 +33,9 @@ function mapPatientToEditForm(p) {
     bloodGroup: p.blood_group ?? '',
     emergencyContactName: p.emergency_contact_name ?? '',
     emergencyContactPhone: p.emergency_contact_phone ?? '',
-    insuranceProvider: p.insurance_provider ?? '',
-    insurancePolicyNumber: p.insurance_policy_number ?? '',
-    insuranceGroupNumber: p.insurance_group_number ?? '',
   };
 }
 
-/** API may return camelCase keys; rows use snake_case from MySQL. */
 function normalizeHistoryPayload(raw) {
   if (!raw || typeof raw !== 'object') {
     return { consultations: [], labOrders: [], prescriptions: [], appointments: [] };
@@ -223,7 +216,7 @@ export default function PatientsPage() {
         {rows.length > SEARCH_PREVIEW_ROWS ? (
           <p className="border-t border-slate-100 px-4 py-3 text-center text-sm text-slate-600">
             And <span className="font-semibold tabular-nums text-slate-900">{othersCount}</span> other{' '}
-            {othersCount === 1 ? 'patient' : 'patients'} not shown in this preview — narrow your search to see them here, or use the dropdowns below
+            {othersCount === 1 ? 'patient' : 'patients'} not shown — narrow your search to see them, or use the dropdowns below
             (edit / history) which list everyone in the current result set.
           </p>
         ) : rows.length > 0 ? (
@@ -232,14 +225,14 @@ export default function PatientsPage() {
       </section>
 
       {canEdit ? (
-        <PdfServiceBlock code="PM-1" title="Add new patient" description="Register a new record with demographics and emergency contacts.">
+        <PdfServiceBlock title="Add new patient" description="Register a new record with demographics and an emergency contact.">
           <form onSubmit={create} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <label className="hmis-label">Legal first name</label>
+              <label className="hmis-label">First name</label>
               <input required className="hmis-input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
             </div>
             <div>
-              <label className="hmis-label">Legal last name</label>
+              <label className="hmis-label">Last name</label>
               <input required className="hmis-input" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
             </div>
             <div>
@@ -263,7 +256,7 @@ export default function PatientsPage() {
               <label className="hmis-label">Email</label>
               <input type="email" className="hmis-input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </div>
-            <div className="sm:col-span-2">
+            <div className="sm:col-span-2 lg:col-span-3">
               <label className="hmis-label">Address</label>
               <input className="hmis-input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             </div>
@@ -271,7 +264,7 @@ export default function PatientsPage() {
               <label className="hmis-label">Blood group</label>
               <input className="hmis-input" value={form.bloodGroup} onChange={(e) => setForm({ ...form, bloodGroup: e.target.value })} />
             </div>
-            <div className="sm:col-span-2 hmis-divider pt-4">
+            <div className="sm:col-span-2 lg:col-span-3 hmis-divider pt-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Emergency contact</p>
             </div>
             <div>
@@ -281,21 +274,6 @@ export default function PatientsPage() {
             <div>
               <label className="hmis-label">Emergency contact phone</label>
               <input className="hmis-input" value={form.emergencyContactPhone} onChange={(e) => setForm({ ...form, emergencyContactPhone: e.target.value })} />
-            </div>
-            <div className="sm:col-span-2 hmis-divider pt-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Insurance (optional)</p>
-            </div>
-            <div>
-              <label className="hmis-label">Insurance provider</label>
-              <input className="hmis-input" value={form.insuranceProvider} onChange={(e) => setForm({ ...form, insuranceProvider: e.target.value })} />
-            </div>
-            <div>
-              <label className="hmis-label">Policy number</label>
-              <input className="hmis-input" value={form.insurancePolicyNumber} onChange={(e) => setForm({ ...form, insurancePolicyNumber: e.target.value })} />
-            </div>
-            <div>
-              <label className="hmis-label">Group number</label>
-              <input className="hmis-input" value={form.insuranceGroupNumber} onChange={(e) => setForm({ ...form, insuranceGroupNumber: e.target.value })} />
             </div>
             <div className="flex items-end sm:col-span-2 lg:col-span-3">
               <button type="submit" className="hmis-btn-primary">
@@ -307,7 +285,7 @@ export default function PatientsPage() {
       ) : null}
 
       {canEdit ? (
-        <PdfServiceBlock code="PM-2" title="Edit existing patient" description="Choose a patient from the current search results; their chart demographics load automatically for you to update.">
+        <PdfServiceBlock title="Edit existing patient" description="Choose a patient from the current search results; their chart loads automatically for you to update.">
           <form onSubmit={saveEdit} className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
               <label className="hmis-label">Patient</label>
@@ -375,21 +353,6 @@ export default function PatientsPage() {
                   <label className="hmis-label">Emergency contact phone</label>
                   <input className="hmis-input" value={editForm.emergencyContactPhone} onChange={(e) => setEditForm({ ...editForm, emergencyContactPhone: e.target.value })} />
                 </div>
-                <div className="md:col-span-2 hmis-divider pt-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Insurance</p>
-                </div>
-                <div>
-                  <label className="hmis-label">Provider</label>
-                  <input className="hmis-input" value={editForm.insuranceProvider} onChange={(e) => setEditForm({ ...editForm, insuranceProvider: e.target.value })} />
-                </div>
-                <div>
-                  <label className="hmis-label">Policy number</label>
-                  <input className="hmis-input" value={editForm.insurancePolicyNumber} onChange={(e) => setEditForm({ ...editForm, insurancePolicyNumber: e.target.value })} />
-                </div>
-                <div>
-                  <label className="hmis-label">Group number</label>
-                  <input className="hmis-input" value={editForm.insuranceGroupNumber} onChange={(e) => setEditForm({ ...editForm, insuranceGroupNumber: e.target.value })} />
-                </div>
                 <div className="md:col-span-2">
                   <button type="submit" className="hmis-btn-primary">
                     Save changes
@@ -401,7 +364,7 @@ export default function PatientsPage() {
         </PdfServiceBlock>
       ) : null}
 
-      <PdfServiceBlock code="PM-4" title="Patient history" description="Consultations, lab orders, and prescriptions for the selected patient (from the current search list).">
+      <PdfServiceBlock title="Patient history" description="Consultations, lab orders, and prescriptions for the selected patient.">
         <div className="flex flex-wrap gap-2">
           <select
             className="hmis-select max-w-md"

@@ -96,6 +96,17 @@ function computeSlotsAvailable(dateStr, booked) {
 }
 
 async function requireBookableSlot(pool, { doctorId, scheduledAt, durationMinutes = 30, excludeAppointmentId }) {
+  const normalizedDoctorId = Number(doctorId);
+  if (!normalizedDoctorId || Number.isNaN(normalizedDoctorId)) {
+    return { ok: false, error: 'Select a valid doctor before booking the appointment.' };
+  }
+  const [[doctor]] = await pool.query(
+    `SELECT id FROM users WHERE id = ? AND role = 'doctor' AND is_active = 1`,
+    [normalizedDoctorId]
+  );
+  if (!doctor) {
+    return { ok: false, error: 'Selected doctor was not found or is inactive.' };
+  }
   const normalized = normalizeScheduledInput(scheduledAt);
   const dateStr = normalized.slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
@@ -115,7 +126,7 @@ async function requireBookableSlot(pool, { doctorId, scheduledAt, durationMinute
   if (extendsPastSessionEnd(slotStart, dur)) {
     return { ok: false, error: 'Visit extends past clinic session end (17:00).' };
   }
-  const booked = await fetchBookedForDay(pool, doctorId, dateStr, excludeAppointmentId);
+  const booked = await fetchBookedForDay(pool, normalizedDoctorId, dateStr, excludeAppointmentId);
   if (hasOverlap(slotStart, dur, booked)) {
     return { ok: false, error: 'Selected time is not an available slot for this physician.' };
   }
@@ -196,9 +207,25 @@ router.post('/follow-up', requireRole('admin', 'receptionist', 'doctor'), async 
 
 router.post('/', requireRole('admin', 'receptionist'), async (req, res) => {
   const b = req.body || {};
+  const patientId = Number(b.patientId);
+  const doctorId = Number(b.doctorId);
+  const visitType = b.visitType === 'emergency' ? 'emergency' : 'routine';
+  if (!patientId || Number.isNaN(patientId)) {
+    return res.status(400).json({ error: 'Select a valid patient before booking the appointment.' });
+  }
+  if (!doctorId || Number.isNaN(doctorId)) {
+    return res.status(400).json({ error: 'Select a valid doctor before booking the appointment.' });
+  }
+  if (!b.scheduledAt) {
+    return res.status(400).json({ error: 'Select an appointment date and time.' });
+  }
+  const [[patient]] = await pool.query('SELECT id FROM patients WHERE id = ?', [patientId]);
+  if (!patient) {
+    return res.status(404).json({ error: 'Selected patient was not found.' });
+  }
   const durationMinutes = b.durationMinutes || 30;
   const slotCheck = await requireBookableSlot(pool, {
-    doctorId: b.doctorId,
+    doctorId,
     scheduledAt: b.scheduledAt,
     durationMinutes,
     excludeAppointmentId: null,
@@ -210,12 +237,12 @@ router.post('/', requireRole('admin', 'receptionist'), async (req, res) => {
     `INSERT INTO appointments (patient_id, doctor_id, scheduled_at, duration_minutes, status, reason, visit_type, created_by)
      VALUES (?, ?, ?, ?, 'scheduled', ?, COALESCE(?, 'routine'), ?)`,
     [
-      b.patientId,
-      b.doctorId,
+      patientId,
+      doctorId,
       String(b.scheduledAt).replace('T', ' ').slice(0, 19),
       durationMinutes,
       b.reason || null,
-      b.visitType || 'routine',
+      visitType,
       req.user.id,
     ]
   );

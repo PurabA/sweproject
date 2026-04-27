@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import pool from '../db.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
 
 const router = Router();
 router.use(authenticate);
+
+const ROLES = ['admin', 'doctor', 'receptionist', 'pharmacist', 'lab'];
 
 router.get('/', async (req, res) => {
   const [rows] = await pool.query(
@@ -14,59 +16,73 @@ router.get('/', async (req, res) => {
   res.json(rows);
 });
 
-router.post('/demo-email', async (req, res) => {
-  const b = req.body || {};
-  await pool.execute(
-    `INSERT INTO notifications (user_id, channel, subject, body, sent_at)
-     VALUES (?, 'email', ?, ?, NOW())`,
-    [req.user.id, b.subject || 'HMIS notification', b.body || '(no body)']
+router.get('/recipients', async (_req, res) => {
+  const [rows] = await pool.query(
+    `SELECT id, email, role, first_name, last_name FROM users WHERE is_active = 1 ORDER BY role, last_name, first_name`
   );
-  res.status(201).json({ ok: true, message: 'Logged as notification record (demo — no real email sent)' });
+  res.json(rows);
 });
 
-router.post('/demo-sms', async (req, res) => {
-  const b = req.body || {};
+router.patch('/:id/read', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
   await pool.execute(
-    `INSERT INTO notifications (user_id, channel, subject, body, sent_at)
-     VALUES (?, 'sms', ?, ?, NOW())`,
-    [req.user.id, b.subject || 'HMIS SMS', b.body || '(no body)']
+    `UPDATE notifications SET read_at = NOW() WHERE id = ? AND user_id = ?`,
+    [id, req.user.id]
   );
-  res.status(201).json({ ok: true, message: 'Logged as SMS notification record (demo — no carrier send)' });
+  res.json({ ok: true });
 });
 
-router.post('/send', requireRole('doctor', 'admin'), async (req, res) => {
+/**
+ * Anyone authenticated may send a notification. Three modes:
+ *   target: "all"          → broadcast to every active user
+ *   target: <role>         → all active users with that role
+ *   target: "user"  + userId → a single named user
+ */
+router.post('/send', async (req, res) => {
   const target = String(req.body?.target || '').trim().toLowerCase();
   const subject = String(req.body?.subject || '').trim();
   const body = String(req.body?.body || '').trim();
 
   if (!subject || !body) return res.status(400).json({ error: 'subject and body are required' });
 
-  let roles;
-  if (target === 'all') roles = null;
-  else if (target === 'pharmacist') roles = ['pharmacist'];
-  else if (target === 'lab') roles = ['lab'];
-  else if (target === 'admin') roles = ['admin'];
-  else return res.status(400).json({ error: "target must be one of: all, pharmacist, lab, admin" });
+  let recipientIds = [];
 
-  const senderLabel = req.user?.role === 'doctor' ? `Dr. ${req.user?.email || req.user?.id}` : `${req.user?.email || req.user?.id}`;
+  if (target === 'all') {
+    const [rows] = await pool.query(`SELECT id FROM users WHERE is_active = 1 AND id <> ? ORDER BY id`, [req.user.id]);
+    recipientIds = rows.map((r) => r.id);
+  } else if (ROLES.includes(target)) {
+    const [rows] = await pool.query(
+      `SELECT id FROM users WHERE is_active = 1 AND role = ? AND id <> ? ORDER BY id`,
+      [target, req.user.id]
+    );
+    recipientIds = rows.map((r) => r.id);
+  } else if (target === 'user') {
+    const userId = Number(req.body?.userId);
+    if (!userId) return res.status(400).json({ error: 'userId required when target=user' });
+    if (userId === req.user.id) return res.status(400).json({ error: 'Cannot send to yourself' });
+    const [[u]] = await pool.query(`SELECT id FROM users WHERE id = ? AND is_active = 1`, [userId]);
+    if (!u) return res.status(404).json({ error: 'Recipient not found' });
+    recipientIds = [u.id];
+  } else {
+    return res.status(400).json({
+      error: `target must be "all", "user", or one of: ${ROLES.join(', ')}`,
+    });
+  }
+
+  if (!recipientIds.length) return res.status(409).json({ error: 'No recipients matched' });
+
+  const senderLabel = req.user?.email || `User #${req.user.id}`;
   const fullSubject = `[From ${senderLabel}] ${subject}`;
-  const fullBody = body;
-
-  const sql = roles
-    ? `SELECT id FROM users WHERE is_active = 1 AND role IN (${roles.map(() => '?').join(',')}) ORDER BY id`
-    : `SELECT id FROM users WHERE is_active = 1 ORDER BY id`;
-  const [users] = await pool.query(sql, roles || []);
-  const targets = users.map((u) => u.id).filter(Boolean);
-  if (!targets.length) return res.status(409).json({ error: 'No recipients matched' });
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    for (const userId of targets) {
+    for (const userId of recipientIds) {
       await conn.execute(
         `INSERT INTO notifications (user_id, channel, subject, body)
          VALUES (?, 'in_app', ?, ?)`,
-        [userId, fullSubject, fullBody]
+        [userId, fullSubject, body]
       );
     }
     await conn.commit();
@@ -77,8 +93,8 @@ router.post('/send', requireRole('doctor', 'admin'), async (req, res) => {
     conn.release();
   }
 
-  await audit(req, 'notify_send', 'notification', null, { target, recipients: targets.length });
-  res.status(201).json({ ok: true, recipients: targets.length });
+  await audit(req, 'notify_send', 'notification', null, { target, recipients: recipientIds.length });
+  res.status(201).json({ ok: true, recipients: recipientIds.length });
 });
 
 export default router;

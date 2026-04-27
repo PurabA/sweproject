@@ -56,7 +56,7 @@ export const HMIS_SERVICE_CATEGORIES = [
       { code: 'CW-2', name: 'Prescription Management', description: 'Create, track, and dispense outpatient prescriptions.', path: '/clinical' },
       { code: 'CW-3', name: 'Lab Test Ordering', description: 'Requisitions linked to encounters.', path: '/clinical' },
       { code: 'CW-4', name: 'Lab Result Management', description: 'Result entry and completion of lab orders.', path: '/clinical' },
-      { code: 'CW-5', name: 'Follow-up Scheduling', description: 'Book return visits tied to a prior appointment.', path: '/appointments' },
+      { code: 'CW-5', name: 'Appointment Scheduling', description: 'Book return visits as normal appointments.', path: '/appointments' },
     ],
   },
   {
@@ -85,7 +85,7 @@ export const HMIS_SERVICE_CATEGORIES = [
     id: 'emergency_care',
     name: 'Emergency & Care',
     services: [
-      { code: 'EC-1', name: 'ICU Bed Management', description: 'Bed board with occupancy and cleaning states.', path: '/facility' },
+      { code: 'EC-1', name: 'ICU Bed Management', description: 'Bed board with available and occupied states.', path: '/facility' },
       { code: 'EC-2', name: 'Emergency Admission', description: 'Rapid encounter creation for emergency presentations.', path: '/facility' },
       { code: 'EC-3', name: 'Triage Assignment', description: 'Triage level captured on the consultation record.', path: '/facility' },
     ],

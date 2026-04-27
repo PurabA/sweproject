@@ -6,7 +6,10 @@ import { audit } from '../middleware/audit.js';
 const router = Router();
 router.use(authenticate);
 
-/** Rapid emergency encounter + optional ICU assignment (PDF Emergency Admission + Triage). */
+/** Rapid emergency encounter + optional ICU assignment.
+ *  When the receptionist (or admin) books an ICU bed for the assigned doctor
+ *  in this same call, the doctor is notified in-app.
+ */
 router.post('/emergency-admissions', requireRole('admin', 'doctor', 'receptionist'), async (req, res) => {
   const b = req.body || {};
   if (!b.patientId || !b.chiefComplaint) {
@@ -30,15 +33,40 @@ router.post('/emergency-admissions', requireRole('admin', 'doctor', 'receptionis
       ]
     );
     const consultationId = r.insertId;
+    let bedCode = null;
     if (b.icuBedId) {
+      const [[bed]] = await conn.query(`SELECT bed_code, status FROM icu_beds WHERE id = ?`, [b.icuBedId]);
+      if (!bed) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'ICU bed not found' });
+      }
+      if (bed.status === 'occupied') {
+        await conn.rollback();
+        return res.status(400).json({ error: `ICU bed ${bed.bed_code} is already occupied` });
+      }
+      bedCode = bed.bed_code;
       await conn.execute(
         `UPDATE icu_beds SET status = 'occupied', patient_id = ?, notes = COALESCE(?, notes) WHERE id = ?`,
         [b.patientId, b.bedNotes || 'Emergency admission', b.icuBedId]
       );
+      // Notify the assigned doctor — they need to know an ICU bed has been
+      // booked for this emergency on their panel.
+      if (req.user.role !== 'doctor') {
+        await conn.execute(
+          `INSERT INTO notifications (user_id, channel, subject, body)
+           VALUES (?, 'in_app', ?, ?)`,
+          [
+            doctorId,
+            `Emergency ICU bed booked: ${bedCode}`,
+            `Reception booked ICU bed ${bedCode} on your behalf for an emergency consultation (#${consultationId}).`
+              + (b.bedNotes ? `\nNotes: ${b.bedNotes}` : ''),
+          ]
+        );
+      }
     }
     await conn.commit();
-    await audit(req, 'create', 'emergency_consultation', consultationId);
-    res.status(201).json({ consultationId, icuBedUpdated: Boolean(b.icuBedId) });
+    await audit(req, 'create', 'emergency_consultation', consultationId, { icuBedId: b.icuBedId || null });
+    res.status(201).json({ consultationId, icuBedUpdated: Boolean(b.icuBedId), bedCode });
   } catch (e) {
     await conn.rollback();
     throw e;
@@ -49,7 +77,8 @@ router.post('/emergency-admissions', requireRole('admin', 'doctor', 'receptionis
 
 router.get('/icu-beds', requireRole('admin', 'doctor', 'receptionist'), async (_req, res) => {
   const [rows] = await pool.query(
-    `SELECT b.*, p.patient_number, p.first_name AS pf, p.last_name AS pl FROM icu_beds b
+    `SELECT b.*, IF(b.status = 'cleaning', 'occupied', b.status) AS status,
+            p.patient_number, p.first_name AS pf, p.last_name AS pl FROM icu_beds b
      LEFT JOIN patients p ON p.id = b.patient_id ORDER BY b.bed_code`
   );
   res.json(rows);
@@ -57,9 +86,13 @@ router.get('/icu-beds', requireRole('admin', 'doctor', 'receptionist'), async (_
 
 router.patch('/icu-beds/:id', requireRole('admin', 'doctor', 'receptionist'), async (req, res) => {
   const b = req.body || {};
+  const nextStatus = b.status === 'cleaning' ? 'occupied' : b.status;
+  if (nextStatus && !['available', 'occupied', 'reserved'].includes(nextStatus)) {
+    return res.status(400).json({ error: 'status must be available or occupied' });
+  }
   await pool.execute(
     `UPDATE icu_beds SET status = COALESCE(?, status), patient_id = COALESCE(?, patient_id), notes = COALESCE(?, notes) WHERE id = ?`,
-    [b.status ?? null, b.patientId ?? null, b.notes ?? null, req.params.id]
+    [nextStatus ?? null, b.patientId ?? null, b.notes ?? null, req.params.id]
   );
   await audit(req, 'update', 'icu_bed', req.params.id);
   res.json({ ok: true });
@@ -118,7 +151,7 @@ router.patch('/surgeries/:id/book-icu', requireRole('admin', 'receptionist'), as
     if (bed.status !== 'available') return res.status(400).json({ error: 'ICU bed not available' });
 
     await conn.execute(
-      `UPDATE icu_beds SET status = 'reserved', patient_id = ?, notes = COALESCE(notes, 'Reserved for upcoming surgery') WHERE id = ?`,
+      `UPDATE icu_beds SET status = 'occupied', patient_id = ?, notes = COALESCE(notes, 'Booked for upcoming surgery') WHERE id = ?`,
       [sr.patient_id, icuBedId]
     );
 

@@ -8,6 +8,7 @@ import AppointmentsPage from './pages/AppointmentsPage.jsx';
 import ClinicalPage from './pages/ClinicalPage.jsx';
 import BillingPage from './pages/BillingPage.jsx';
 import PharmacyPage from './pages/PharmacyPage.jsx';
+import LabPage from './pages/LabPage.jsx';
 import FacilityPage from './pages/FacilityPage.jsx';
 import NotificationsPage from './pages/NotificationsPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
@@ -25,11 +26,6 @@ function Protected({ children }) {
   return children;
 }
 
-/**
- * Route-level RBAC. Centralizing this here means individual pages no longer carry
- * dead role-guard code (which previously caused React hooks-rules violations
- * because the early `return` ran before the page's other useState/useEffect calls).
- */
 function RoleGate({ allow, children }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
@@ -51,12 +47,10 @@ export default function App() {
       >
         <Route index element={<DashboardHome />} />
 
-        {/* Patients & appointments are not part of the doctor workflow — they're handled
-            by Registration. Doctors get redirected home if they hit these URLs directly. */}
         <Route
           path="patients"
           element={
-            <RoleGate allow={['admin', 'receptionist', 'pharmacist', 'lab']}>
+            <RoleGate allow={['admin', 'receptionist']}>
               <PatientsPage />
             </RoleGate>
           }
@@ -69,7 +63,6 @@ export default function App() {
             </RoleGate>
           }
         />
-
         <Route
           path="clinical"
           element={
@@ -89,8 +82,16 @@ export default function App() {
         <Route
           path="pharmacy"
           element={
-            <RoleGate allow={['admin', 'pharmacist', 'doctor']}>
+            <RoleGate allow={['admin', 'pharmacist']}>
               <PharmacyPage />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="lab"
+          element={
+            <RoleGate allow={['admin', 'lab']}>
+              <LabPage />
             </RoleGate>
           }
         />
@@ -102,7 +103,14 @@ export default function App() {
             </RoleGate>
           }
         />
-        <Route path="notifications" element={<NotificationsPage />} />
+        <Route
+          path="notifications"
+          element={
+            <RoleGate allow={['admin', 'doctor', 'receptionist', 'pharmacist', 'lab']}>
+              <NotificationsPage />
+            </RoleGate>
+          }
+        />
         <Route
           path="admin"
           element={

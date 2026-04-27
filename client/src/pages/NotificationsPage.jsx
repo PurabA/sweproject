@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import PdfServiceBlock from '../components/PdfServiceBlock.jsx';
-import { useAuth } from '../context/AuthContext.jsx';
 
 function channelPill(ch) {
   const c = (ch || '').toLowerCase();
@@ -11,11 +10,11 @@ function channelPill(ch) {
 }
 
 export default function NotificationsPage() {
-  const { user } = useAuth();
   const [rows, setRows] = useState([]);
+  const [recipients, setRecipients] = useState([]);
   const [msg, setMsg] = useState('');
   const [sendMsg, setSendMsg] = useState('');
-  const [sendForm, setSendForm] = useState({ target: 'pharmacist', subject: '', body: '' });
+  const [sendForm, setSendForm] = useState({ target: 'all', userId: '', subject: '', body: '' });
 
   const load = () => {
     api('/api/notifications')
@@ -25,6 +24,7 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     load();
+    api('/api/notifications/recipients').then(setRecipients).catch(() => {});
   }, []);
 
   const send = async (e) => {
@@ -32,8 +32,16 @@ export default function NotificationsPage() {
     setSendMsg('');
     setMsg('');
     try {
-      await api('/api/notifications/send', { method: 'POST', body: JSON.stringify(sendForm) });
-      setSendForm({ target: sendForm.target, subject: '', body: '' });
+      await api('/api/notifications/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          target: sendForm.target,
+          userId: sendForm.target === 'user' ? Number(sendForm.userId) : undefined,
+          subject: sendForm.subject,
+          body: sendForm.body,
+        }),
+      });
+      setSendForm({ target: sendForm.target, userId: sendForm.userId, subject: '', body: '' });
       setSendMsg('Notification sent.');
       load();
     } catch (ex) {
@@ -51,35 +59,49 @@ export default function NotificationsPage() {
 
       {msg ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{msg}</div> : null}
 
-      {['doctor', 'admin'].includes(user?.role) ? (
-        <PdfServiceBlock code="AN-2" title="Send notification" description="Send an in-app notification to a role group.">
-          <form onSubmit={send} className="grid gap-4 md:grid-cols-3">
-            <div>
-              <label className="hmis-label">Audience</label>
-              <select className="hmis-select" value={sendForm.target} onChange={(e) => setSendForm({ ...sendForm, target: e.target.value })}>
-                <option value="all">Everyone</option>
-                <option value="pharmacist">Pharmacist</option>
-                <option value="lab">Lab</option>
-                <option value="admin">Admin</option>
+      <PdfServiceBlock code="AN-2" title="Send notification" description="Send an in-app notification to one user, a role group, or everyone.">
+        <form onSubmit={send} className="grid gap-4 md:grid-cols-3">
+          <div>
+            <label className="hmis-label">Audience</label>
+            <select className="hmis-select" value={sendForm.target} onChange={(e) => setSendForm({ ...sendForm, target: e.target.value })}>
+              <option value="all">Everyone</option>
+              <option value="user">One user</option>
+              <option value="admin">Admins</option>
+              <option value="doctor">Doctors</option>
+              <option value="receptionist">Receptionists</option>
+              <option value="pharmacist">Pharmacists</option>
+              <option value="lab">Lab</option>
+            </select>
+          </div>
+          {sendForm.target === 'user' ? (
+            <div className="md:col-span-2">
+              <label className="hmis-label">Recipient</label>
+              <select required className="hmis-select" value={sendForm.userId} onChange={(e) => setSendForm({ ...sendForm, userId: e.target.value })}>
+                <option value="">Select user…</option>
+                {recipients.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.first_name} {r.last_name} · {r.role} · {r.email}
+                  </option>
+                ))}
               </select>
             </div>
-            <div className="md:col-span-2">
-              <label className="hmis-label">Subject</label>
-              <input className="hmis-input" value={sendForm.subject} onChange={(e) => setSendForm({ ...sendForm, subject: e.target.value })} placeholder="e.g., urgent restock needed" />
-            </div>
-            <div className="md:col-span-3">
-              <label className="hmis-label">Message</label>
-              <textarea className="hmis-input min-h-[100px]" value={sendForm.body} onChange={(e) => setSendForm({ ...sendForm, body: e.target.value })} />
-            </div>
-            <div className="md:col-span-3">
-              <button type="submit" className="hmis-btn-primary">
-                Send
-              </button>
-              {sendMsg ? <span className="ml-3 text-sm text-slate-700">{sendMsg}</span> : null}
-            </div>
-          </form>
-        </PdfServiceBlock>
-      ) : null}
+          ) : null}
+          <div className={sendForm.target === 'user' ? 'md:col-span-3' : 'md:col-span-2'}>
+            <label className="hmis-label">Subject</label>
+            <input required className="hmis-input" value={sendForm.subject} onChange={(e) => setSendForm({ ...sendForm, subject: e.target.value })} placeholder="e.g., urgent restock needed" />
+          </div>
+          <div className="md:col-span-3">
+            <label className="hmis-label">Message</label>
+            <textarea required className="hmis-input min-h-[100px]" value={sendForm.body} onChange={(e) => setSendForm({ ...sendForm, body: e.target.value })} />
+          </div>
+          <div className="md:col-span-3">
+            <button type="submit" className="hmis-btn-primary">
+              Send
+            </button>
+            {sendMsg ? <span className="ml-3 text-sm text-slate-700">{sendMsg}</span> : null}
+          </div>
+        </form>
+      </PdfServiceBlock>
 
       <PdfServiceBlock code="AN-2" title="Inbox" description="Latest 50 notifications for the signed-in user.">
         <div className="mb-3">
@@ -112,4 +134,3 @@ export default function NotificationsPage() {
     </div>
   );
 }
-

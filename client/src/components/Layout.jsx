@@ -67,13 +67,20 @@ export default function Layout() {
   const navigate = useNavigate();
   const role = user?.role;
 
+  // Per-role sidebar.
+  // - Doctor:       dashboard, clinical, billing (their paid receipts), facility (read-only ICU), notifications
+  // - Receptionist: dashboard, patients, appointments, billing (full), facility (full), notifications
+  // - Pharmacist:   dashboard, clinical (consults table only), inventory, notifications
+  // - Lab:          dashboard, clinical (consults table only), lab orders, notifications
+  // - Admin:        everything + security & administration
   const nav = [
     { to: '/', label: 'Dashboard', icon: 'dashboard', show: true },
-    { to: '/patients', label: 'Patient management', icon: 'patients', show: ['admin', 'receptionist', 'pharmacist', 'lab'].includes(role) },
+    { to: '/patients', label: 'Patient management', icon: 'patients', show: ['admin', 'receptionist'].includes(role) },
     { to: '/appointments', label: 'Appointments & scheduling', icon: 'calendar', show: ['admin', 'receptionist'].includes(role) },
     { to: '/clinical', label: 'Clinical workflow', icon: 'clinical', show: ['admin', 'doctor', 'pharmacist', 'lab'].includes(role) },
     { to: '/billing', label: 'Billing & financial', icon: 'billing', show: ['admin', 'receptionist', 'doctor'].includes(role) },
-    { to: '/pharmacy', label: 'Pharmacy & inventory', icon: 'pharmacy', show: ['admin', 'pharmacist', 'doctor'].includes(role) },
+    { to: '/pharmacy', label: 'Inventory', icon: 'pharmacy', show: ['admin', 'pharmacist'].includes(role) },
+    { to: '/lab', label: 'Lab requests', icon: 'clinical', show: ['admin', 'lab'].includes(role) },
     { to: '/facility', label: 'Emergency & care', icon: 'facility', show: ['admin', 'doctor', 'receptionist'].includes(role) },
     { to: '/notifications', label: 'Notifications', icon: 'notifications', show: ['admin', 'doctor', 'receptionist', 'pharmacist', 'lab'].includes(role) },
     { to: '/admin', label: 'Security & administration', icon: 'admin', show: role === 'admin' },

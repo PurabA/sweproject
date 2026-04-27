@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Clinical / hospital UI tokens — custom colors used with plain CSS where @apply + variants breaks. */
+@layer base {
+  html {
+    @apply antialiased;
+  }
+  body {
+    font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+    @apply bg-[#eef1f5] text-slate-900;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  .hmis-page-title {
+    @apply text-[1.65rem] font-bold tracking-tight text-slate-900;
+  }
+  .hmis-page-desc {
+    @apply mt-1.5 max-w-3xl text-[0.9375rem] leading-relaxed text-slate-600;
+  }
+  .hmis-card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,41,66,0.06),0_1px_2px_rgba(15,41,66,0.04)];
+  }
+  .hmis-card-h {
+    @apply border-b border-slate-100 bg-slate-50/80 px-4 py-3 text-sm font-semibold text-slate-800;
+  }
+  .hmis-label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .hmis-input {
+    @apply w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400;
+  }
+  .hmis-input:focus {
+    outline: none;
+    border-color: #1e4a7d;
+    box-shadow: 0 0 0 2px rgb(45 95 154 / 0.2);
+  }
+  .hmis-select {
+    @apply w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm;
+  }
+  .hmis-select:focus {
+    outline: none;
+    border-color: #1e4a7d;
+    box-shadow: 0 0 0 2px rgb(45 95 154 / 0.2);
+  }
+  .hmis-btn-primary {
+    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#1e4a7d] disabled:opacity-50;
+    background-color: #1e4a7d;
+    color: #ffffff;
+  }
+  .hmis-btn-primary:hover {
+    background-color: #163d68;
+  }
+  .hmis-btn-primary:focus-visible {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px #2d5f9a;
+  }
+  .hmis-btn-secondary {
+    @apply inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300;
+  }
+  .hmis-table-wrap {
+    @apply hmis-card overflow-hidden;
+  }
+  .hmis-table {
+    @apply min-w-full divide-y divide-slate-200 text-sm;
+  }
+  .hmis-thead {
+    @apply bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-600;
+  }
+  .hmis-tbody {
+    @apply divide-y divide-slate-100 bg-white text-slate-800;
+  }
+  .hmis-stat-card {
+    @apply hmis-card border-l-4 p-5;
+    border-left-color: #2d5f9a;
+  }
+  .hmis-stat-label {
+    @apply text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .hmis-stat-value {
+    @apply mt-1 text-3xl font-semibold tabular-nums text-slate-900;
+  }
+  .hmis-badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide;
+  }
+  .hmis-badge-info {
+    @apply bg-sky-100 text-sky-800;
+  }
+  .hmis-badge-warn {
+    @apply bg-amber-100 text-amber-900;
+  }
+  .hmis-badge-critical {
+    @apply bg-red-100 text-red-800;
+  }
+  .hmis-muted {
+    @apply text-slate-500;
+  }
+  .hmis-link {
+    color: #1e4a7d;
+    @apply underline-offset-2 hover:underline;
+  }
+  .hmis-link:hover {
+    color: #0f2942;
+  }
+  .hmis-pill {
+    @apply inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium capitalize;
+  }
+  .hmis-pill-emerald {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-900;
+  }
+  .hmis-pill-amber {
+    @apply border-amber-200 bg-amber-50 text-amber-900;
+  }
+  .hmis-pill-slate {
+    @apply border-slate-200 bg-slate-50 text-slate-700;
+  }
+  .hmis-pill-sky {
+    @apply border-sky-200 bg-sky-50 text-sky-900;
+  }
+  .hmis-pill-rose {
+    @apply border-rose-200 bg-rose-50 text-rose-900;
+  }
+  .hmis-divider {
+    @apply border-t border-slate-100;
+  }
+}
